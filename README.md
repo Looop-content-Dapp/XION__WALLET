@@ -3,6 +3,7 @@
 A TypeScript SDK for interacting with the XION blockchain network, providing secure wallet management and transaction capabilities.
 
 ## Prerequisites
+
 - Node.js >= 16.0.0
 - TypeScript >= 4.5.0
 - Access to XION blockchain network (testnet or mainnet)
@@ -24,6 +25,7 @@ PORT=3000
 ```
 
 ## Features
+
 - Secure wallet creation and management
 - Transaction signing and verification
 - Grant management system
@@ -31,6 +33,7 @@ PORT=3000
 - Encrypted storage capabilities
 
 ## Security Considerations
+
 - **Key Storage:** All sensitive data is encrypted before storage
 - **Biometric Authentication:** Implements secure session management
 - **Grant Expiration:** Automatically validates grant expiration
