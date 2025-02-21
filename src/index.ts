@@ -1,15 +1,19 @@
 import express from 'express';
-import walletRouter from './api/walletApi';
+import { connectToDatabase } from "./db"
+import router from '../src/api/walletApi'
 
 const app = express();
 
-// Middleware to parse JSON bodies
 app.use(express.json());
-
-// Mount the wallet routes with the /api/wallet prefix
-app.use('/api/wallet', walletRouter);
+app.use('/api/wallet', router);
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+
+async function startServer() {
+  await connectToDatabase();
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+startServer();

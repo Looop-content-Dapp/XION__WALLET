@@ -27,8 +27,10 @@
     "@cosmjs/tendermint-rpc": "^0.32.4",
     "@keplr-wallet/cosmos": "^0.12.168",
     "@keplr-wallet/crypto": "^0.12.168",
+    "bcrypt": "^5.1.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "mongoose": "^8.10.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "starknet": "^6.11.0",
@@ -37,6 +39,7 @@
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
+    "@types/bcrypt": "^5.0.2",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.2",
@@ -50,7 +53,7 @@
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2",
+    "typescript": "^5.7.3",
     "util": "^0.12.5",
     "vitest": "^2.1.8"
   }
