@@ -1,8 +1,5 @@
-Below is a detailed `README.md` file tailored to your Node.js wallet project using CosmJS, Xion, and MongoDB. It explains the code structure, functionality, and how it aligns with your application for music lovers and artists, providing a Web2-like experience.
 
----
-
-# Looop Music Wallet API
+# Xion Wallet API
 
 Welcome to the **Looop Music Wallet API**, a Node.js-based backend for a cryptocurrency wallet designed for music lovers and artists on the Xion blockchain (a Cosmos SDK-based chain). This project leverages CosmJS and `@burnt-labs` packages to provide a seamless, Web2-like experience while maintaining blockchain security. It ties wallet functionality to user email/password logins, encrypts mnemonics server-side, and offers Web2-style recovery, making it ideal for a music-focused audience.
 

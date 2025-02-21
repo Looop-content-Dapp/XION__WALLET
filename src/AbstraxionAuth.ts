@@ -84,6 +84,7 @@ export class AbstraxionAuth {
     // Optionally store in session/db if needed
   }
 
+
   private encryptMnemonic(mnemonic: string, password: string) {
     const salt = crypto.randomBytes(16);
     const key = crypto.pbkdf2Sync(password + this.serverSecret, salt, 100000, 32, 'sha256');
