@@ -58,7 +58,9 @@ export class AbstraxionAuth {
   isLoggedIn = false;
   authStateChangeSubscribers: ((isLoggedIn: boolean) => void)[] = [];
 
-  constructor() {}
+  constructor() {
+    console.log('Initialized with Server Secret:', this.serverSecret);
+  }
 
   configureAbstraxionInstance(rpc: string, restUrl?: string, treasury?: string) {
     this.rpcUrl = rpc;
@@ -88,15 +90,13 @@ export class AbstraxionAuth {
   }
 
   private normalizePassword(password: string): string {
-    return password.trim(); // Remove whitespace for consistency
+    return password.trim();
   }
 
-  private encryptMnemonic(mnemonic: string, password: string) {
+  private encryptMnemonic(mnemonic: string) {
     console.log('Encrypting with Server Secret:', this.serverSecret);
-    const normalizedPassword = this.normalizePassword(password);
-    console.log('Encrypting with Password:', normalizedPassword);
     const salt = crypto.randomBytes(16);
-    const key = crypto.pbkdf2Sync(normalizedPassword + this.serverSecret, salt, 100000, 32, 'sha256');
+    const key = crypto.pbkdf2Sync(this.serverSecret, salt, 100000, 32, 'sha256');
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
     let encrypted = cipher.update(mnemonic, 'utf8', 'hex');
@@ -105,12 +105,11 @@ export class AbstraxionAuth {
     return { encrypted, iv: iv.toString('hex'), salt: salt.toString('hex') };
   }
 
-  private decryptMnemonic(encrypted: string, iv: string, salt: string, password: string) {
-    console.log('Decrypting with:', { encrypted, iv, salt, password, serverSecret: this.serverSecret });
-    const normalizedPassword = this.normalizePassword(password);
-    const saltBuffer = Buffer.from(salt, 'hex'); // Ensure hex string → Buffer
-    const ivBuffer = Buffer.from(iv, 'hex'); // Ensure hex string → Buffer
-    const key = crypto.pbkdf2Sync(normalizedPassword + this.serverSecret, saltBuffer, 100000, 32, 'sha256');
+  private decryptMnemonic(encrypted: string, iv: string, salt: string) {
+    console.log('Decrypting with:', { encrypted, iv, salt, serverSecret: this.serverSecret });
+    const saltBuffer = Buffer.from(salt, 'hex');
+    const ivBuffer = Buffer.from(iv, 'hex');
+    const key = crypto.pbkdf2Sync(this.serverSecret, saltBuffer, 100000, 32, 'sha256');
     console.log('Derived Key:', key.toString('hex'));
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
@@ -122,16 +121,16 @@ export class AbstraxionAuth {
   async signup(email: string, password: string) {
     const existingWallet = await Wallet.findOne({ email });
     if (existingWallet) throw new Error("Email already registered with a wallet");
-  
+
     const entropy = Random.getBytes(32);
     const mnemonic = Bip39.encode(entropy).toString();
     const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, {
       prefix: "xion",
       hdPaths: [makeCosmoshubPath(0)]
     });
-    const { encrypted, iv, salt } = this.encryptMnemonic(mnemonic, password);
+    const { encrypted, iv, salt } = this.encryptMnemonic(mnemonic);
     const [{ address }] = await keypair.getAccounts();
-  
+
     const hashedPassword = await bcrypt.hash(this.normalizePassword(password), 12);
     console.log('Signup Data:', { email, password: this.normalizePassword(password), address, encryptedMnemonic: encrypted, iv, salt, mnemonic });
     await Wallet.create({
@@ -139,19 +138,19 @@ export class AbstraxionAuth {
       password: hashedPassword,
       xion: { address, encryptedMnemonic: encrypted, iv, salt }
     });
-  
+
     this.abstractAccount = keypair;
     this.triggerAuthStateChange(true);
     return { address, mnemonic };
   }
-  
+
   async login(email: string, password: string) {
     const wallet = await Wallet.findOne({ email });
     if (!wallet) throw new Error("Wallet not found");
-  
+
     const isPasswordValid = await bcrypt.compare(this.normalizePassword(password), wallet.password);
     if (!isPasswordValid) throw new Error("Invalid password");
-  
+
     console.log('Login Wallet Data:', {
       email,
       password: this.normalizePassword(password),
@@ -159,22 +158,38 @@ export class AbstraxionAuth {
       storedIV: wallet.xion.iv,
       storedSalt: wallet.xion.salt
     });
-  
+
     try {
       const mnemonic = this.decryptMnemonic(
         wallet.xion.encryptedMnemonic,
         wallet.xion.iv,
-        wallet.xion.salt,
-        password
+        wallet.xion.salt
       );
       const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, {
         prefix: "xion",
         hdPaths: [makeCosmoshubPath(0)],
       });
-      // Rest of the method...
+
+      const granter = this.getGranter();
+      if (granter) {
+        const accounts = await keypair.getAccounts();
+        const keypairAddress = accounts[0].address;
+        const pollSuccess = await this.pollForGrants(keypairAddress, granter);
+        console.log('Grant Check Result:', pollSuccess);
+        if (!pollSuccess) {
+          console.warn('No valid grants found; proceeding without grant verification:', { grantee: keypairAddress, granter });
+        }
+        this.setGranter(granter);
+      } else {
+        console.log('No granter address provided; skipping grant check.');
+      }
+
+      this.abstractAccount = keypair;
+      this.triggerAuthStateChange(true);
+      return keypair;
     } catch (error) {
-      console.error('Decryption Error:', error);
-      throw new Error("Failed to decrypt mnemonic - check password or data integrity");
+      console.error('Login Error:', error);
+      throw new Error("Failed to login - check data integrity or grant configuration");
     }
   }
 
@@ -183,11 +198,12 @@ export class AbstraxionAuth {
     if (!wallet) throw new Error("Wallet not found");
 
     const recoveryToken = crypto.randomBytes(32).toString('hex');
-    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
     wallet.recoveryToken = recoveryToken;
     wallet.recoveryTokenExpiry = expiry;
     await wallet.save();
 
+    console.log('Recovery Token Generated:', { email, token: recoveryToken });
     return recoveryToken;
   }
 
@@ -198,22 +214,12 @@ export class AbstraxionAuth {
     }
 
     const hashedPassword = await bcrypt.hash(this.normalizePassword(newPassword), 12);
-    const mnemonic = this.decryptMnemonic(
-      wallet.xion.encryptedMnemonic,
-      wallet.xion.iv,
-      wallet.xion.salt,
-      wallet.password
-    );
-    const { encrypted, iv, salt } = this.encryptMnemonic(mnemonic, newPassword);
-
     wallet.password = hashedPassword;
-    wallet.xion.encryptedMnemonic = encrypted;
-    wallet.xion.iv = iv;
-    wallet.xion.salt = salt;
     // wallet.recoveryToken = null;
     // wallet.recoveryTokenExpiry = null;
     await wallet.save();
 
+    console.log('Password Reset Successful:', { email, newPassword: this.normalizePassword(newPassword) });
     return true;
   }
 
@@ -249,12 +255,28 @@ export class AbstraxionAuth {
     if (!this.rpcUrl) throw new Error("AbstraxionAuth needs to be configured.");
     const restUrl = this.restUrl || (await fetchConfig(this.rpcUrl)).restUrl;
     const url = `${restUrl}/cosmos/authz/v1beta1/grants?grantee=${grantee}&granter=${granter}`;
-    
-    const res = await fetch(url, { cache: "no-store" });
-    const data: GrantsResponse = await res.json();
-    if (data.grants.length === 0) return false;
+    console.log('Polling Grants API:', url);
 
-    const currentTime = new Date().toISOString();
-    return data.grants.some((grant: Grant) => !grant.expiration || grant.expiration > currentTime);
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) {
+        console.error('Grant API request failed:', { status: res.status, statusText: res.statusText });
+        return false; // Fallback to false if API fails
+      }
+      const data = await res.json();
+      console.log('Grant API Response:', data);
+
+      if (!data || !Array.isArray(data.grants)) {
+        console.warn('Invalid grant response format:', data);
+        return false;
+      }
+      if (data.grants.length === 0) return false;
+
+      const currentTime = new Date().toISOString();
+      return data.grants.some((grant: Grant) => !grant.expiration || grant.expiration > currentTime);
+    } catch (error) {
+      console.error('Error polling grants:', error);
+      return false; // Graceful fallback
+    }
   }
 }
