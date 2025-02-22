@@ -34,7 +34,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "starknet": "^6.11.0",
-    "starknet-tokenbound-sdk": "^0.3.9"
+    "starknet-tokenbound-sdk": "^0.3.9",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",

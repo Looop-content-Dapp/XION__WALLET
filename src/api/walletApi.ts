@@ -1,4 +1,3 @@
-// walletRouter.ts
 import { Router, Request, Response, NextFunction } from 'express';
 import { AbstraxionAuth } from '../AbstraxionAuth';
 import dotenv from 'dotenv';
@@ -121,6 +120,37 @@ router.get('/balance/:address', asyncHandler(async (req: Request, res: Response)
     success: true,
     data: { address, balance: balance.amount, denom: balance.denom },
     message: 'Balance retrieved successfully'
+  });
+}));
+
+router.post('/execute-contract', asyncHandler(async (req: Request, res: Response) => {
+  const { email, password, contractAddress, msg, memo } = req.body;
+  if (!email || !password || !contractAddress || !msg) {
+    return res.status(400).json({ success: false, message: 'Missing required parameters: email, password, contractAddress, and msg are required' });
+  }
+
+  await auth.login(email, password); // Authenticate user
+  const result = await auth.executeSmartContract(contractAddress, msg, memo);
+
+  return res.status(200).json({
+    success: true,
+    data: result,
+    message: 'Smart contract executed successfully'
+  });
+}));
+
+router.post('/reset-email', asyncHandler(async (req: Request, res: Response) => {
+  const { currentEmail, newEmail, password } = req.body;
+  if (!currentEmail || !newEmail || !password) {
+    return res.status(400).json({ success: false, message: 'Missing required parameters: currentEmail, newEmail, and password are required' });
+  }
+
+  const result = await auth.resetEmail(currentEmail, newEmail, password);
+
+  return res.status(200).json({
+    success: true,
+    data: result,
+    message: 'Email reset successfully'
   });
 }));
 

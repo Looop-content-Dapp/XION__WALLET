@@ -1,11 +1,11 @@
-// models/Wallet.ts
 import { Schema, model } from "mongoose";
 
 const walletSchema = new Schema(
   {
     email: { type: String, required: true, unique: true },
+    userId: { type: String, required: false, unique: true }, // Persistent user ID
     password: { type: String, required: true }, // Hashed password
-    xion: { // Make xion required
+    xion: {
       type: {
         address: { type: String, required: true },
         encryptedMnemonic: { type: String, required: true },
@@ -19,7 +19,5 @@ const walletSchema = new Schema(
   },
   { timestamps: true }
 );
-
-// walletSchema.index({ email: 1 }, { unique: true });
 
 export const Wallet = model("wallets", walletSchema);
