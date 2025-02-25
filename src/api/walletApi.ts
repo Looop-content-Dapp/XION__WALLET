@@ -65,6 +65,55 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+// Endpoint to get NFTs for the logged-in user
+router.post('/nfts', asyncHandler(async (req: Request, res: Response) => {
+  const { email, password, contractAddress } = req.body;
+  if (!email || !password || !contractAddress) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email, password, and contractAddress are required',
+    });
+  }
+
+  // Authenticate the user
+  await auth.login(email, password);
+  const nfts = await auth.getLoggedInUserNFTs(contractAddress);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      walletAddress: await auth.getKeypairAddress(),
+      contractAddress,
+      nfts,
+    },
+    message: 'NFTs retrieved successfully',
+  });
+}));
+
+// Endpoint to get NFTs for any address (public query)
+router.get('/nfts/:address', asyncHandler(async (req: Request, res: Response) => {
+  const { address } = req.params;
+  const { contractAddress } = req.query; // Pass contractAddress as a query parameter
+  if (!address || !contractAddress) {
+    return res.status(400).json({
+      success: false,
+      message: 'Wallet address and contractAddress are required',
+    });
+  }
+
+  const nfts = await auth.getNFTsForAddress(address, contractAddress as string);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      walletAddress: address,
+      contractAddress,
+      nfts,
+    },
+    message: 'NFTs retrieved successfully',
+  });
+}));
+
 router.post('/recover', asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
   if (!email) {
