@@ -1,7 +1,6 @@
-// AbstraxionAuth.ts
-import { GasPrice, SigningStargateClient } from "@cosmjs/stargate";
+import { GasPrice, SigningStargateClient, calculateFee, coins, Coin  } from "@cosmjs/stargate";
 import { fetchConfig } from "@burnt-labs/constants";
-import { coins, makeCosmoshubPath } from "@cosmjs/amino";
+import { makeCosmoshubPath } from "@cosmjs/amino";
 import { GranteeSignerClient } from "./GranteeSignerClient";
 import { SignArbSecp256k1HdWallet } from "./SignArbSecp256k1HdWallet";
 import * as crypto from "crypto";
@@ -13,66 +12,105 @@ import { Any } from "cosmjs-types/google/protobuf/any";
 import { BasicAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/feegrant";
 import { Registry } from "@cosmjs/proto-signing/build";
 
-export interface GrantsResponse {
-  grants: Grant[];
-  pagination: Pagination;
+/**
+ * Interface representing a fee grant configuration response from the Xion network.
+ */
+interface GrantsResponse {
+  readonly grants: readonly Grant[];
+  readonly pagination: Pagination;
 }
 
-export interface Grant {
-  granter: string;
-  grantee: string;
-  authorization: Authorization;
-  expiration: string;
+/**
+ * Interface representing a single fee grant.
+ */
+interface Grant {
+  readonly granter: string;
+  readonly grantee: string;
+  readonly authorization: Authorization;
+  readonly expiration: string | null;
 }
 
-export interface Authorization {
-  "@type": string;
-  grants: GrantAuthorization[];
+/**
+ * Interface representing the authorization details of a grant.
+ */
+interface Authorization {
+  readonly "@type": string;
+  readonly grants: readonly GrantAuthorization[];
 }
 
-export interface GrantAuthorization {
-  contract: string;
-  limit: Limit;
-  filter: Filter;
+/**
+ * Interface representing grant authorization details.
+ */
+interface GrantAuthorization {
+  readonly contract: string;
+  readonly limit: Limit;
+  readonly filter: Filter;
 }
 
-export interface Limit {
-  "@type": string;
-  remaining: string;
+/**
+ * Interface representing the limit of a grant authorization.
+ */
+interface Limit {
+  readonly "@type": string;
+  readonly remaining: string;
 }
 
-export interface Filter {
-  "@type": string;
+/**
+ * Interface representing the filter of a grant authorization.
+ */
+interface Filter {
+  readonly "@type": string;
 }
 
-export interface Pagination {
-  next_key: null | string;
-  total: string;
+/**
+ * Interface representing pagination metadata for API responses.
+ */
+interface Pagination {
+  readonly next_key: string | null;
+  readonly total: string;
 }
 
+/**
+ * Manages authentication, wallet operations, and smart contract interactions for Xion wallets.
+ * Provides methods for user signup, login, fee grants, and smart contract execution.
+ */
 export class AbstraxionAuth {
   private rpcUrl?: string;
   private restUrl?: string;
   private treasury?: string;
-  private serverSecret: string = process.env.SERVER_SECRET || (() => { 
-    throw new Error('SERVER_SECRET is required in .env'); 
-  })();
+  private readonly serverSecret: string;
   private client?: GranteeSignerClient;
-  abstractAccount?: SignArbSecp256k1HdWallet;
-  isLoggedIn = false;
-  authStateChangeSubscribers: ((isLoggedIn: boolean) => void)[] = [];
+  private abstractAccount?: SignArbSecp256k1HdWallet;
+  private isLoggedIn: boolean = false;
+  private readonly authStateChangeSubscribers: ((isLoggedIn: boolean) => void)[] = [];
 
+  /**
+   * Creates an instance of AbstraxionAuth.
+   * @throws {Error} If SERVER_SECRET is not provided in the environment.
+   */
   constructor() {
+    this.serverSecret = process.env.SERVER_SECRET || (() => { throw new Error('SERVER_SECRET is required in .env'); })();
     console.log('Initialized with Server Secret:', this.serverSecret);
   }
 
-  configureAbstraxionInstance(rpc: string, restUrl?: string, treasury?: string) {
+  /**
+   * Configures the Xion instance with RPC, REST, and treasury addresses.
+   * @param rpc The RPC endpoint URL.
+   * @param restUrl Optional REST endpoint URL.
+   * @param treasury Optional treasury address.
+   */
+  configureAbstraxionInstance(rpc: string, restUrl?: string, treasury?: string): void {
     this.rpcUrl = rpc;
     this.restUrl = restUrl;
     this.treasury = treasury;
   }
 
-  subscribeToAuthStateChange(callback: (isLoggedIn: boolean) => void) {
+  /**
+   * Subscribes to authentication state changes.
+   * @param callback Function to call when auth state changes.
+   * @returns Unsubscribe function.
+   */
+  subscribeToAuthStateChange(callback: (isLoggedIn: boolean) => void): () => void {
     this.authStateChangeSubscribers.push(callback);
     return () => {
       const index = this.authStateChangeSubscribers.indexOf(callback);
@@ -85,13 +123,17 @@ export class AbstraxionAuth {
     this.authStateChangeSubscribers.forEach((callback) => callback(isLoggedIn));
   }
 
+  /**
+   * Retrieves the granter address from environment variables, validating its format.
+   * @returns The granter address starting with "xion1" or undefined if invalid/unset.
+   */
   getGranter(): string | undefined {
     const granter = process.env.GRANTER_ADDRESS;
     if (granter && !granter.startsWith("xion1")) {
       console.warn('GRANTER_ADDRESS is invalid; must start with "xion1". Proceeding without granter:', granter);
       return undefined;
     }
-    return granter; // Returns undefined if unset or invalid
+    return granter;
   }
 
   private setGranter(address: string): void {
@@ -102,7 +144,7 @@ export class AbstraxionAuth {
     return password.trim();
   }
 
-  private encryptMnemonic(mnemonic: string) {
+  private encryptMnemonic(mnemonic: string): { encrypted: string; iv: string; salt: string } {
     console.log('Encrypting with Server Secret:', this.serverSecret);
     const salt = crypto.randomBytes(16);
     const key = crypto.pbkdf2Sync(this.serverSecret, salt, 100000, 32, 'sha256');
@@ -114,7 +156,7 @@ export class AbstraxionAuth {
     return { encrypted, iv: iv.toString('hex'), salt: salt.toString('hex') };
   }
 
-  private decryptMnemonic(encrypted: string, iv: string, salt: string) {
+  private decryptMnemonic(encrypted: string, iv: string, salt: string): string {
     console.log('Decrypting with:', { encrypted, iv, salt, serverSecret: this.serverSecret });
     const saltBuffer = Buffer.from(salt, 'hex');
     const ivBuffer = Buffer.from(iv, 'hex');
@@ -132,68 +174,13 @@ export class AbstraxionAuth {
     return Bip39.encode(seed).toString();
   }
 
-  private async grantFeeAllowance(granteeAddress: string): Promise<void> {
-    const granterMnemonic = process.env.GRANTER_MNEMONIC;
-    if (!granterMnemonic) {
-      console.error("GRANTER_MNEMONIC not set in .env; skipping fee grant");
-      return;
-    }
-
-    try {
-      const granterWallet = await SignArbSecp256k1HdWallet.fromMnemonic(granterMnemonic, {
-        prefix: "xion",
-      });
-
-      // Create a custom registry with fee grant types
-      const registry = new Registry();
-      registry.register("/cosmos.feegrant.v1beta1.MsgGrantAllowance", MsgGrantAllowance);
-      registry.register("/cosmos.feegrant.v1beta1.BasicAllowance", BasicAllowance);
-
-      // Connect to Xion testnet with the custom registry
-      const client = await SigningStargateClient.connectWithSigner(
-        this.rpcUrl!,
-        granterWallet,
-        { registry } // Pass the custom registry
-      );
-      const [granterAccount] = await granterWallet.getAccounts();
-      const granterAddress = granterAccount.address;
-
-      // Define the fee grant allowance
-      const allowance = {
-        typeUrl: "/cosmos.feegrant.v1beta1.BasicAllowance",
-        value: BasicAllowance.fromPartial({
-          spendLimit: coins(1000000, "uxion"), // 1,000,000 uxion limit
-          // expiration: null, // No expiration
-        }),
-      };
-
-      const packedAllowance = Any.fromPartial({
-        typeUrl: allowance.typeUrl,
-        value: BasicAllowance.encode(allowance.value).finish(), // Encode directly
-      });
-
-      const msg = {
-        typeUrl: "/cosmos.feegrant.v1beta1.MsgGrantAllowance",
-        value: MsgGrantAllowance.fromPartial({
-          granter: granterAddress,
-          grantee: granteeAddress,
-          allowance: packedAllowance,
-        }),
-      };
-
-      const fee = {
-        amount: coins(5000, "uxion"),
-        gas: "200000",
-      };
-
-      const result = await client.signAndBroadcast(granterAddress, [msg], fee, "Granting fee allowance to new user");
-      console.log(`Fee grant issued to ${granteeAddress}. Tx Hash: ${result.transactionHash}`);
-    } catch (error) {
-      console.error(`Failed to grant fee allowance to ${granteeAddress}:`, error);
-    }
-  }
-
-  async signup(email: string, password: string) {
+  /**
+   * Signs up a new user, creating a wallet and issuing a fee grant.
+   * @param email User's email address.
+   * @param password User's password.
+   * @returns Object containing the user's address and mnemonic, with an optional warning if fee grant fails.
+   */
+  async signup(email: string, password: string): Promise<{ address: string; mnemonic: string; warning?: string }> {
     let wallet = await Wallet.findOne({ email });
     
     let mnemonic: string;
@@ -207,16 +194,17 @@ export class AbstraxionAuth {
       address = wallet.xion.address;
     } else {
       mnemonic = this.generateDeterministicMnemonic(email);
-      const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, {
-        prefix: "xion",
-        hdPaths: [makeCosmoshubPath(0)]
-      });
+      const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
       encryptedData = this.encryptMnemonic(mnemonic);
       const [{ address: newAddress }] = await keypair.getAccounts();
       address = newAddress;
 
-      // Grant fee allowance to the new address
-      await this.grantFeeAllowance(address);
+      try {
+        await this.grantFeeAllowance(address);
+      } catch (error) {
+        console.error(`Fee grant failed for ${address}:`, error);
+        return { address, mnemonic, warning: "Fee grant failed. Please fund your account with uxion to execute transactions." };
+      }
     }
 
     const hashedPassword = await bcrypt.hash(this.normalizePassword(password), 12);
@@ -231,10 +219,7 @@ export class AbstraxionAuth {
       await wallet.save();
     }
 
-    const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, {
-      prefix: "xion",
-      hdPaths: [makeCosmoshubPath(0)]
-    });
+    const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
     this.abstractAccount = keypair;
     this.triggerAuthStateChange(true);
 
@@ -242,7 +227,14 @@ export class AbstraxionAuth {
     return { address, mnemonic };
   }
 
-  async login(email: string, password: string) {
+  /**
+   * Logs in a user with their email and password, verifying the account and setting up the keypair.
+   * @param email User's email address.
+   * @param password User's password.
+   * @returns The user's keypair if login succeeds.
+   * @throws {Error} If wallet not found or password is invalid.
+   */
+  async login(email: string, password: string): Promise<SignArbSecp256k1HdWallet> {
     const wallet = await Wallet.findOne({ email });
     if (!wallet) throw new Error("Wallet not found");
 
@@ -291,12 +283,18 @@ export class AbstraxionAuth {
     }
   }
 
-  async requestRecovery(email: string) {
+  /**
+   * Requests a password recovery token for a user.
+   * @param email User's email address.
+   * @returns Recovery token string.
+   * @throws {Error} If wallet not found.
+   */
+  async requestRecovery(email: string): Promise<string> {
     const wallet = await Wallet.findOne({ email });
     if (!wallet) throw new Error("Wallet not found");
 
     const recoveryToken = crypto.randomBytes(32).toString('hex');
-    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours expiry
     wallet.recoveryToken = recoveryToken;
     wallet.recoveryTokenExpiry = expiry;
     await wallet.save();
@@ -305,7 +303,15 @@ export class AbstraxionAuth {
     return recoveryToken;
   }
 
-  async resetPassword(email: string, token: string, newPassword: string) {
+  /**
+   * Resets a user's password using a recovery token.
+   * @param email User's email address.
+   * @param token Recovery token.
+   * @param newPassword New password.
+   * @returns Boolean indicating success.
+   * @throws {Error} If token is invalid or expired.
+   */
+  async resetPassword(email: string, token: string, newPassword: string): Promise<boolean> {
     const wallet = await Wallet.findOne({ email, recoveryToken: token });
     if (!wallet || (wallet.recoveryTokenExpiry && wallet.recoveryTokenExpiry < new Date())) {
       throw new Error("Invalid or expired recovery token");
@@ -319,7 +325,15 @@ export class AbstraxionAuth {
     return true;
   }
 
-  async resetEmail(currentEmail: string, newEmail: string, password: string) {
+  /**
+   * Resets a user's email address.
+   * @param currentEmail Current email address.
+   * @param newEmail New email address.
+   * @param password User's password for verification.
+   * @returns Object with success message and updated details.
+   * @throws {Error} If wallet not found, password invalid, or new email already registered.
+   */
+  async resetEmail(currentEmail: string, newEmail: string, password: string): Promise<{ message: string; newEmail: string; address: string }> {
     const wallet = await Wallet.findOne({ email: currentEmail });
     if (!wallet) throw new Error("Wallet not found");
 
@@ -336,21 +350,30 @@ export class AbstraxionAuth {
     return { message: "Email updated successfully", newEmail, address: wallet.xion.address };
   }
 
-  async getKeypairAddress() {
+  /**
+   * Retrieves the keypair address of the currently logged-in user.
+   * @returns The Xion address of the first account, or an empty string if not logged in.
+   */
+  async getKeypairAddress(): Promise<string> {
     if (!this.abstractAccount) return "";
     const accounts = await this.abstractAccount.getAccounts();
     return accounts[0]?.address || "";
   }
 
+  /**
+   * Gets a signer client for executing transactions on the Xion network.
+   * @returns A GranteeSignerClient instance configured with the user's keypair and granter.
+   * @throws {Error} If RPC URL or abstract account is not configured.
+   */
   async getSigner(): Promise<GranteeSignerClient> {
     if (!this.rpcUrl) throw new Error("Configuration not initialized");
     if (!this.abstractAccount) throw new Error("No abstract account found");
     const accounts = await this.abstractAccount.getAccounts();
     const granteeAddress = accounts[0].address;
-    const granterAddress = this.getGranter(); // Don’t fallback to granteeAddress here
-  
+    const granterAddress = this.getGranter();
+
     console.log('Granter:', granterAddress, 'Grantee:', granteeAddress);
-  
+
     return await GranteeSignerClient.connectWithSigner(this.rpcUrl, this.abstractAccount, {
       gasPrice: GasPrice.fromString("0uxion"),
       granterAddress: granterAddress || undefined, // Explicitly pass undefined if no granter
@@ -359,6 +382,14 @@ export class AbstraxionAuth {
     });
   }
 
+  /**
+   * Executes a smart contract on the Xion network.
+   * @param contractAddress The Xion address of the smart contract.
+   * @param msg The message to send to the contract.
+   * @param memo Optional memo for the transaction.
+   * @returns Object with transaction details and success information.
+   * @throws {Error} If user is not logged in, RPC URL is not configured, or transaction fails.
+   */
   async executeSmartContract(contractAddress: string, msg: Record<string, any>, memo?: string) {
     if (!this.isLoggedIn || !this.abstractAccount) throw new Error("User must be logged in to execute a smart contract");
     if (!this.rpcUrl) throw new Error("RPC URL must be configured");
@@ -407,11 +438,21 @@ export class AbstraxionAuth {
     }
   }
 
-  logout() {
+  /**
+   * Logs out the current user, resetting the abstract account and auth state.
+   */
+  logout(): void {
     this.abstractAccount = undefined;
     this.triggerAuthStateChange(false);
   }
 
+  /**
+   * Polls the Xion network for existing fee grants between a grantee and granter.
+   * @param grantee The grantee Xion address.
+   * @param granter The granter Xion address.
+   * @returns Boolean indicating if a valid grant exists.
+   * @throws {Error} If RPC URL is not configured.
+   */
   async pollForGrants(grantee: string, granter: string): Promise<boolean> {
     if (!this.rpcUrl) throw new Error("AbstraxionAuth needs to be configured.");
     const restUrl = this.restUrl || (await fetchConfig(this.rpcUrl)).restUrl;
@@ -424,8 +465,7 @@ export class AbstraxionAuth {
         console.error('Grant API request failed:', { status: res.status, statusText: res.statusText });
         return false;
       }
-      const data = await res.json();
-      console.log('Grant API Response:', data);
+      const data = await res.json() as GrantsResponse;
 
       if (!data || !Array.isArray(data.grants)) {
         console.warn('Invalid grant response format:', data);
@@ -438,6 +478,53 @@ export class AbstraxionAuth {
     } catch (error) {
       console.error('Error polling grants:', error);
       return false;
+    }
+  }
+
+  /**
+   * Grants a fee allowance to a grantee address using the granter's mnemonic.
+   * @param granteeAddress The Xion address to receive the fee grant.
+   * @throws {Error} If GRANTER_MNEMONIC is not set or RPC is not configured.
+   */
+  private async grantFeeAllowance(granteeAddress: string): Promise<void> {
+    const granterMnemonic = process.env.GRANTER_MNEMONIC;
+    if (!granterMnemonic) {
+      console.error("GRANTER_MNEMONIC not set in .env; skipping fee grant");
+      return;
+    }
+
+    if (!this.rpcUrl) throw new Error("RPC URL must be configured");
+
+    try {
+      const granterWallet = await SignArbSecp256k1HdWallet.fromMnemonic(granterMnemonic, { prefix: "xion" });
+      const registry = new Registry();
+      registry.register("/cosmos.feegrant.v1beta1.MsgGrantAllowance", MsgGrantAllowance);
+      registry.register("/cosmos.feegrant.v1beta1.BasicAllowance", BasicAllowance);
+
+      const client = await SigningStargateClient.connectWithSigner(this.rpcUrl, granterWallet, { registry });
+      const [granterAccount] = await granterWallet.getAccounts();
+      const granterAddress = granterAccount.address;
+
+      const allowance = {
+        typeUrl: "/cosmos.feegrant.v1beta1.BasicAllowance",
+        value: BasicAllowance.fromPartial({ spendLimit: coins(1000000, "uxion") }),
+      };
+
+      const packedAllowance = Any.fromPartial({
+        typeUrl: allowance.typeUrl,
+        value: BasicAllowance.encode(allowance.value).finish(),
+      });
+
+      const msg = {
+        typeUrl: "/cosmos.feegrant.v1beta1.MsgGrantAllowance",
+        value: MsgGrantAllowance.fromPartial({ granter: granterAddress, grantee: granteeAddress, allowance: packedAllowance }),
+      };
+
+      const fee = { amount: coins(5000, "uxion"), gas: "200000" };
+      const result = await client.signAndBroadcast(granterAddress, [msg], fee, "Granting fee allowance to new user");
+      console.log(`Fee grant issued to ${granteeAddress}. Tx Hash: ${result.transactionHash}`);
+    } catch (error) {
+      console.error(`Failed to grant fee allowance to ${granteeAddress}:`, error);
     }
   }
 }

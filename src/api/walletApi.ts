@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { coins } from "@cosmjs/amino";
 import { CosmWasmClient } from '@cosmjs/cosmwasm-stargate';
 import { connectToDatabase } from '../db';
+import rateLimit from 'express-rate-limit'
 
 dotenv.config();
 const router = Router();
@@ -16,6 +17,16 @@ auth.configureAbstraxionInstance(
   process.env.REST_URL || 'https://api.xion-testnet-1.burnt.com',
   process.env.TREASURY_ADDRESS
 );
+
+// Define rate limiter (100 requests per 15 minutes per IP)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: { success: false, message: 'Too many requests from this IP, please try again later.' }
+});
+
+// Apply rate limiter to all routes
+router.use(limiter);
 
 const asyncHandler = (
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void | Response>
@@ -49,7 +60,7 @@ router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   const walletAddress = await auth.getKeypairAddress();
   return res.status(200).json({
     success: true,
-    data: { walletAddress, isAuthenticated: auth.isLoggedIn },
+    data: { walletAddress  },
     message: 'Logged in successfully'
   });
 }));
