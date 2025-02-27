@@ -11,6 +11,7 @@ import { MsgGrantAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/tx";
 import { Any } from "cosmjs-types/google/protobuf/any";
 import { BasicAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/feegrant";
 import { Registry } from "@cosmjs/proto-signing/build";
+import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate/build";
 
 /**
  * Interface representing a fee grant configuration response from the Xion network.
@@ -174,58 +175,117 @@ export class AbstraxionAuth {
     return Bip39.encode(seed).toString();
   }
 
-  /**
-   * Signs up a new user, creating a wallet and issuing a fee grant.
-   * @param email User's email address.
-   * @param password User's password.
-   * @returns Object containing the user's address and mnemonic, with an optional warning if fee grant fails.
-   */
-  async signup(email: string, password: string): Promise<{ address: string; mnemonic: string; warning?: string }> {
-    let wallet = await Wallet.findOne({ email });
-    
-    let mnemonic: string;
-    let encryptedData: { encrypted: string; iv: string; salt: string };
-    let address: string;
-
-    if (wallet) {
-      console.log('Wallet found, reusing stored mnemonic for:', email);
-      mnemonic = this.decryptMnemonic(wallet.xion.encryptedMnemonic, wallet.xion.iv, wallet.xion.salt);
-      encryptedData = { encrypted: wallet.xion.encryptedMnemonic, iv: wallet.xion.iv, salt: wallet.xion.salt };
-      address = wallet.xion.address;
-    } else {
-      mnemonic = this.generateDeterministicMnemonic(email);
-      const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
-      encryptedData = this.encryptMnemonic(mnemonic);
-      const [{ address: newAddress }] = await keypair.getAccounts();
-      address = newAddress;
-
-      try {
-        await this.grantFeeAllowance(address);
-      } catch (error) {
-        console.error(`Fee grant failed for ${address}:`, error);
-        return { address, mnemonic, warning: "Fee grant failed. Please fund your account with uxion to execute transactions." };
-      }
-    }
-
-    const hashedPassword = await bcrypt.hash(this.normalizePassword(password), 12);
-    if (!wallet) {
-      wallet = await Wallet.create({
-        email,
-        password: hashedPassword,
-        xion: { address, encryptedMnemonic: encryptedData.encrypted, iv: encryptedData.iv, salt: encryptedData.salt }
-      });
-    } else {
-      wallet.password = hashedPassword;
-      await wallet.save();
-    }
-
-    const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
-    this.abstractAccount = keypair;
-    this.triggerAuthStateChange(true);
-
-    console.log('Signup Data:', { email, password: this.normalizePassword(password), address, encryptedMnemonic: encryptedData.encrypted, iv: encryptedData.iv, salt: encryptedData.salt, mnemonic });
-    return { address, mnemonic };
+ /**
+ * Dispenses test tokens to a new user's address from the treasury account.
+ * @param recipientAddress The Xion address to receive test tokens.
+ * @param amount The amount of uxion to send (default: 1000000 uxion, i.e., 1 XION).
+ * @throws {Error} If treasury mnemonic or RPC URL is not configured.
+ */
+private async dispenseTestTokens(recipientAddress: string, amount: string = "1000000"): Promise<void> {
+  const treasuryMnemonic = process.env.TREASURY_MNEMONIC;
+  if (!treasuryMnemonic) {
+    console.error("TREASURY_MNEMONIC not set in .env; cannot dispense test tokens");
+    return;
   }
+  if (!this.rpcUrl) throw new Error("RPC URL must be configured");
+
+  try {
+    const treasuryWallet = await SignArbSecp256k1HdWallet.fromMnemonic(treasuryMnemonic, { prefix: "xion" });
+    const [treasuryAccount] = await treasuryWallet.getAccounts();
+    const treasuryAddress = treasuryAccount.address;
+
+    const client = await GranteeSignerClient.connectWithSigner(this.rpcUrl, treasuryWallet, {
+      gasPrice: GasPrice.fromString("0uxion"),
+      granteeAddress: treasuryAddress, // Treasury acts as its own grantee
+      treasuryAddress: this.treasury,
+    });
+
+    const fee = {
+      amount: coins(5000, "uxion"), // Small fee for the transaction
+      gas: "200000",
+    };
+    const tokens = coins(amount, "uxion");
+
+    const result = await client.sendTokens(
+      treasuryAddress,
+      recipientAddress,
+      tokens,
+      fee,
+      "Dispensing test tokens to new user"
+    );
+
+    console.log(`Test tokens dispensed to ${recipientAddress}. Tx Hash: ${result.transactionHash}`);
+  } catch (error) {
+    console.error(`Failed to dispense test tokens to ${recipientAddress}:`, error);
+    throw new Error("Token dispensing failed");
+  }
+}
+
+/**
+ * Signs up a new user, creating a wallet, issuing a fee grant, and dispensing test tokens.
+ * @param email User's email address.
+ * @param password User's password.
+ * @returns Object containing the user's address, mnemonic, and optional warnings.
+ */
+async signup(email: string, password: string): Promise<{ address: string; mnemonic: string; warning?: string }> {
+  let wallet = await Wallet.findOne({ email });
+  let mnemonic: string;
+  let encryptedData: { encrypted: string; iv: string; salt: string };
+  let address: string;
+  let warnings: string[] = [];
+
+  if (wallet) {
+    console.log('Wallet found, reusing stored mnemonic for:', email);
+    mnemonic = this.decryptMnemonic(wallet.xion.encryptedMnemonic, wallet.xion.iv, wallet.xion.salt);
+    encryptedData = { encrypted: wallet.xion.encryptedMnemonic, iv: wallet.xion.iv, salt: wallet.xion.salt };
+    address = wallet.xion.address;
+  } else {
+    mnemonic = this.generateDeterministicMnemonic(email);
+    const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
+    encryptedData = this.encryptMnemonic(mnemonic);
+    const [{ address: newAddress }] = await keypair.getAccounts();
+    address = newAddress;
+
+    // Attempt fee grant
+    try {
+      await this.grantFeeAllowance(address);
+    } catch (error) {
+      console.error(`Fee grant failed for ${address}:`, error);
+      warnings.push("Fee grant failed. You may need to fund your account manually to execute transactions.");
+    }
+
+    // Dispense test tokens
+    try {
+      await this.dispenseTestTokens(address, "1000000"); // 1 XION (adjust amount as needed)
+    } catch (error) {
+      console.error(`Test token dispensing failed for ${address}:`, error);
+      warnings.push("Failed to dispense test tokens. Please use a faucet or fund your account manually.");
+    }
+  }
+
+  const hashedPassword = await bcrypt.hash(this.normalizePassword(password), 12);
+  if (!wallet) {
+    wallet = await Wallet.create({
+      email,
+      password: hashedPassword,
+      xion: { address, encryptedMnemonic: encryptedData.encrypted, iv: encryptedData.iv, salt: encryptedData.salt }
+    });
+  } else {
+    wallet.password = hashedPassword;
+    await wallet.save();
+  }
+
+  const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
+  this.abstractAccount = keypair;
+  this.triggerAuthStateChange(true);
+
+  console.log('Signup Data:', { email, address, mnemonic, warnings });
+  return {
+    address,
+    mnemonic,
+    warning: warnings.length > 0 ? warnings.join(" ") : undefined,
+  };
+}
 
   /**
    * Logs in a user with their email and password, verifying the account and setting up the keypair.
@@ -381,6 +441,56 @@ export class AbstraxionAuth {
       treasuryAddress: this.treasury,
     });
   }
+
+  /**
+ * Fetches all NFTs owned by a given wallet address from a specified CW721 contract.
+ * @param walletAddress The Xion address to check for NFTs.
+ * @param contractAddress The CW721 contract address holding the NFTs.
+ * @returns Array of NFT token IDs owned by the wallet address.
+ * @throws {Error} If RPC URL is not configured or query fails.
+ */
+async getNFTsForAddress(walletAddress: string, contractAddress: string): Promise<string[]> {
+  if (!this.rpcUrl) throw new Error("RPC URL must be configured");
+
+  try {
+    const client = await CosmWasmClient.connect(this.rpcUrl);
+    // Query the CW721 contract for tokens owned by the address
+    const queryMsg = {
+      tokens: {
+        owner: walletAddress,
+        limit: 10, // Adjust limit as needed; pagination may be required for large collections
+      },
+    };
+    const response = await client.queryContractSmart(contractAddress, queryMsg);
+    
+    // Response should contain a `tokens` array of token IDs
+    if (!response || !Array.isArray(response.tokens)) {
+      console.warn(`No NFTs found or invalid response for ${walletAddress} at ${contractAddress}`);
+      return [];
+    }
+
+    console.log(`NFTs retrieved for ${walletAddress}:`, response.tokens);
+    return response.tokens;
+  } catch (error) {
+    console.error(`Error fetching NFTs for ${walletAddress} from ${contractAddress}:`, error);
+    throw new Error("Failed to fetch NFTs - ensure the contract address is valid and the network is accessible");
+  }
+}
+
+/**
+ * Fetches NFTs for the currently logged-in user's wallet address.
+ * @param contractAddress The CW721 contract address to query.
+ * @returns Array of NFT token IDs owned by the logged-in user.
+ * @throws {Error} If user is not logged in or RPC URL is not configured.
+ */
+async getLoggedInUserNFTs(contractAddress: string): Promise<string[]> {
+  if (!this.isLoggedIn || !this.abstractAccount) {
+    throw new Error("User must be logged in to fetch their NFTs");
+  }
+  
+  const walletAddress = await this.getKeypairAddress();
+  return this.getNFTsForAddress(walletAddress, contractAddress);
+}
 
   /**
    * Executes a smart contract on the Xion network.
