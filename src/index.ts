@@ -1,8 +1,8 @@
 import express from 'express';
 import { connectToDatabase } from "./db";
 import helmet from 'helmet';
-import router from '../src/api/walletApi';
 import rateLimit from 'express-rate-limit';
+import router from './api/walletApi';
 
 const app = express();
 
