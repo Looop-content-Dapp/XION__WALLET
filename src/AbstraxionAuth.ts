@@ -6,7 +6,7 @@ import { SignArbSecp256k1HdWallet } from "./SignArbSecp256k1HdWallet";
 import * as crypto from "crypto";
 import { Wallet } from "./models/Wallet";
 import { Bip39 } from "@cosmjs/crypto";
-import { MsgGrantAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/tx";
+import { MsgGrantAllowance, MsgRevokeAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/tx";
 import { Any } from "cosmjs-types/google/protobuf/any";
 import { BasicAllowance } from "cosmjs-types/cosmos/feegrant/v1beta1/feegrant";
 import { Registry } from "@cosmjs/proto-signing/build";
@@ -57,6 +57,8 @@ export class AbstraxionAuth {
   private client?: GranteeSignerClient;
   private abstractAccount?: SignArbSecp256k1HdWallet;
   private isLoggedIn: boolean = false;
+  private sessionToken?: string;
+  private sessionTimeout?: NodeJS.Timeout;
   private readonly authStateChangeSubscribers: ((isLoggedIn: boolean) => void)[] = [];
 
   constructor() {
@@ -145,10 +147,7 @@ export class AbstraxionAuth {
         treasuryAddress: this.treasury,
       });
 
-      const fee = {
-        amount: coins(5000, "uxion"),
-        gas: "200000",
-      };
+      const fee = { amount: coins(5000, "uxion"), gas: "200000" };
       const tokens = coins(amount, "uxion");
 
       const result = await client.sendTokens(
@@ -198,9 +197,7 @@ export class AbstraxionAuth {
         console.error(`Test token dispensing failed for ${address}:`, error);
         warnings.push("Failed to dispense test tokens. Please use a faucet or fund your account manually.");
       }
-    }
 
-    if (!wallet) {
       wallet = await Wallet.create({
         email,
         xion: { address, encryptedMnemonic: encryptedData.encrypted, iv: encryptedData.iv, salt: encryptedData.salt }
@@ -209,14 +206,12 @@ export class AbstraxionAuth {
 
     const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
     this.abstractAccount = keypair;
+    this.sessionToken = crypto.randomBytes(16).toString('hex');
+    this.sessionTimeout = setTimeout(() => this.logout(), 30 * 60 * 1000); // 30 minutes
     this.triggerAuthStateChange(true);
 
     console.log('Signup Data:', { email, address, mnemonic, warnings });
-    return {
-      address,
-      mnemonic,
-      warning: warnings.length > 0 ? warnings.join(" ") : undefined,
-    };
+    return { address, mnemonic, warning: warnings.length > 0 ? warnings.join(" ") : undefined };
   }
 
   async login(email: string): Promise<SignArbSecp256k1HdWallet> {
@@ -224,15 +219,8 @@ export class AbstraxionAuth {
     if (!wallet) throw new Error("Wallet not found");
 
     try {
-      const mnemonic = this.decryptMnemonic(
-        wallet.xion.encryptedMnemonic,
-        wallet.xion.iv,
-        wallet.xion.salt
-      );
-      const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, {
-        prefix: "xion",
-        hdPaths: [makeCosmoshubPath(0)],
-      });
+      const mnemonic = this.decryptMnemonic(wallet.xion.encryptedMnemonic, wallet.xion.iv, wallet.xion.salt);
+      const keypair = await SignArbSecp256k1HdWallet.fromMnemonic(mnemonic, { prefix: "xion", hdPaths: [makeCosmoshubPath(0)] });
 
       const granter = this.getGranter();
       if (granter) {
@@ -249,12 +237,76 @@ export class AbstraxionAuth {
       }
 
       this.abstractAccount = keypair;
+      this.sessionToken = crypto.randomBytes(16).toString('hex');
+      this.sessionTimeout = setTimeout(() => this.logout(), 30 * 60 * 1000); // 30 minutes
       this.triggerAuthStateChange(true);
       return keypair;
     } catch (error) {
       console.error('Login Error:', error);
       throw new Error("Failed to login - check data integrity or grant configuration");
     }
+  }
+
+  async getBalances(address: string, denoms: string[] = ['uxion', 'ibc/57097251ED81A232CE3C9D899E7C8096D6D87EF84BA203E12E424AA4C9B57A64']): Promise<Coin[]> {
+    if (!this.rpcUrl) throw new Error("RPC URL must be configured");
+
+    const client = await CosmWasmClient.connect(this.rpcUrl);
+    const balances = await Promise.all(denoms.map(denom => client.getBalance(address, denom)));
+    return balances.filter(b => BigInt(b.amount) > 0);
+  }
+
+  async getTransactionHistory(address: string, limit: number = 10): Promise<any[]> {
+    if (!this.rpcUrl || !this.restUrl) throw new Error("RPC and REST URLs must be configured");
+
+    const url = `${this.restUrl}/cosmos/tx/v1beta1/txs?events=transfer.recipient='${address}'&order_by=2&pagination.limit=${limit}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch transaction history");
+
+    const data = await res.json();
+    return data.tx_responses || [];
+  }
+
+  async getFeeGrants(grantee: string): Promise<any[]> {
+    if (!this.rpcUrl) throw new Error("AbstraxionAuth needs to be configured.");
+    const restUrl = this.restUrl || (await fetchConfig(this.rpcUrl)).restUrl;
+    const url = `${restUrl}/cosmos/feegrant/v1beta1/allowances/${grantee}`;
+
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.allowances || [];
+  }
+
+  async revokeFeeGrant(granteeAddress: string, granterAddress: string): Promise<void> {
+    const signer = await this.getSigner();
+    const accounts = await this.abstractAccount!.getAccounts();
+    const senderAddress = accounts[0].address;
+
+    const registry = new Registry();
+    registry.register("/cosmos.feegrant.v1beta1.MsgRevokeAllowance", MsgRevokeAllowance);
+
+    const msg = {
+      typeUrl: "/cosmos.feegrant.v1beta1.MsgRevokeAllowance",
+      value: MsgRevokeAllowance.fromPartial({
+        granter: granterAddress,
+        grantee: granteeAddress
+      })
+    };
+
+    const fee = { amount: coins(5000, "uxion"), gas: "200000" };
+    await signer.signAndBroadcast(senderAddress, [msg], fee, "Revoking fee grant");
+  }
+
+  async exportWallet(email: string): Promise<{ address: string; encryptedMnemonic: string; iv: string; salt: string }> {
+    const wallet = await Wallet.findOne({ email });
+    if (!wallet) throw new Error("Wallet not found");
+
+    return {
+      address: wallet.xion.address,
+      encryptedMnemonic: wallet.xion.encryptedMnemonic,
+      iv: wallet.xion.iv,
+      salt: wallet.xion.salt
+    };
   }
 
   async resetEmail(currentEmail: string, newEmail: string): Promise<{ message: string; newEmail: string; address: string }> {
@@ -280,15 +332,24 @@ export class AbstraxionAuth {
   async getSigner(): Promise<GranteeSignerClient> {
     if (!this.rpcUrl) throw new Error("Configuration not initialized");
     if (!this.abstractAccount) throw new Error("No abstract account found");
+
     const accounts = await this.abstractAccount.getAccounts();
     const granteeAddress = accounts[0].address;
     const granterAddress = this.getGranter();
 
-    console.log('Granter:', granterAddress, 'Grantee:', granteeAddress);
+    // Check if a fee grant exists for this grantee-granter pair
+    let useGranter = false;
+    if (granterAddress) {
+      const grants = await this.getFeeGrants(granteeAddress);
+      useGranter = grants.some(grant => grant.granter === granterAddress && (!grant.expiration || new Date(grant.expiration) > new Date()));
+      console.log('Fee Grant Check:', { granteeAddress, granterAddress, hasGrant: useGranter });
+    }
+
+    console.log('Granter:', granterAddress, 'Grantee:', granteeAddress, 'Using Granter:', useGranter);
 
     return await GranteeSignerClient.connectWithSigner(this.rpcUrl, this.abstractAccount, {
       gasPrice: GasPrice.fromString("0uxion"),
-      granterAddress: granterAddress || undefined,
+      granterAddress: useGranter ? granterAddress : undefined,
       granteeAddress,
       treasuryAddress: this.treasury,
     });
@@ -299,12 +360,7 @@ export class AbstraxionAuth {
 
     try {
       const client = await CosmWasmClient.connect(this.rpcUrl);
-      const queryMsg = {
-        tokens: {
-          owner: walletAddress,
-          limit: 10,
-        },
-      };
+      const queryMsg = { tokens: { owner: walletAddress, limit: 10 } };
       const response = await client.queryContractSmart(contractAddress, queryMsg);
 
       if (!response || !Array.isArray(response.tokens)) {
@@ -338,11 +394,13 @@ export class AbstraxionAuth {
     const senderAddress = accounts[0].address;
 
     try {
-      const fee = {
-        amount: coins(5000, "uxion"),
-        gas: "200000",
-      };
+      const client = await CosmWasmClient.connect(this.rpcUrl);
+      const balance = await client.getBalance(senderAddress, "uxion");
+      if (BigInt(balance.amount) < 5000n) {
+        throw new Error("Insufficient uxion balance to cover fees");
+      }
 
+      const fee = { amount: coins(5000, "uxion"), gas: "200000" };
       const result = await signer.execute(
         senderAddress,
         contractAddress,
@@ -366,11 +424,14 @@ export class AbstraxionAuth {
       };
     } catch (error: any) {
       console.error('Error executing smart contract:', error);
+      if (error.message.includes("fee-grant not found")) {
+        throw new Error("Fee grant not found for this address; ensure sufficient uxion balance or valid fee grant");
+      }
       if (error.message.includes("account") && error.message.includes("not found")) {
         throw new Error("Sender account not found on Xion - fund the account with uxion tokens first");
       }
       if (error.message.includes("decoding bech32 failed")) {
-        console.warn('Invalid granter address detected; execution attempted with sender as granter');
+        console.warn('Invalid granter address detected; execution attempted without granter');
       }
       throw error;
     }
@@ -378,7 +439,13 @@ export class AbstraxionAuth {
 
   logout(): void {
     this.abstractAccount = undefined;
+    this.sessionToken = undefined;
+    if (this.sessionTimeout) clearTimeout(this.sessionTimeout);
     this.triggerAuthStateChange(false);
+  }
+
+  getSessionToken(): string | undefined {
+    return this.sessionToken;
   }
 
   async pollForGrants(grantee: string, granter: string): Promise<boolean> {
@@ -407,14 +474,6 @@ export class AbstraxionAuth {
       console.error('Error polling grants:', error);
       return false;
     }
-  }
-
-  async getBalances(address: string, denoms: string[] = ['uxion', 'ibc/57097251ED81A232CE3C9D899E7C8096D6D87EF84BA203E12E424AA4C9B57A64']): Promise<Coin[]> {
-    if (!this.rpcUrl) throw new Error("RPC URL must be configured");
-
-    const client = await CosmWasmClient.connect(this.rpcUrl);
-    const balances = await Promise.all(denoms.map(denom => client.getBalance(address, denom)));
-    return balances.filter(b => BigInt(b.amount) > 0); // Filter out zero balances
   }
 
   private async grantFeeAllowance(granteeAddress: string): Promise<void> {
