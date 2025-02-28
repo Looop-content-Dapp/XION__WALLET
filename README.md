@@ -43,16 +43,16 @@ This hybrid custodial/non-custodial approach balances usability for music fans w
 ---
 
 ## Why This Works for Looop Music
-- **Music Lovers**: 
+- **Music Lovers**:
   - Non-technical users expect a simple login like Spotify or SoundCloud. This API hides blockchain complexity, requiring only email/password.
   - Seamless token transfers (e.g., buying music NFTs) feel like in-app purchases.
-- **Artists**: 
+- **Artists**:
   - Optional mnemonic export supports those needing full control (e.g., managing royalty tokens or NFTs).
   - Secure storage protects valuable assets without manual backup hassles.
-- **Web2 Familiarity**: 
+- **Web2 Familiarity**:
   - Recovery via email aligns with users’ mental models, reducing support overhead.
   - Music-themed prompts (e.g., “Log in to your Music Vault!”) enhance engagement.
-- **Xion Compatibility**: 
+- **Xion Compatibility**:
   - Built with CosmJS and `@burnt-labs` for Xion, ensuring native blockchain support.
 
 This approach makes blockchain accessible to your audience while preserving security and flexibility.

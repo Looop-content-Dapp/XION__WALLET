@@ -4,7 +4,6 @@ import dotenv from 'dotenv';
 import { coins } from "@cosmjs/amino";
 import { CosmWasmClient } from '@cosmjs/cosmwasm-stargate';
 import { connectToDatabase } from '../db';
-// import rateLimit from 'express-rate-limit'
 
 dotenv.config();
 const router = Router();
@@ -17,16 +16,6 @@ auth.configureAbstraxionInstance(
   process.env.REST_URL || 'https://api.xion-testnet-1.burnt.com',
   process.env.TREASURY_ADDRESS
 );
-
-// Define rate limiter (100 requests per 15 minutes per IP)
-// const limiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 100, // Limit each IP to 100 requests per windowMs
-//   message: { success: false, message: 'Too many requests from this IP, please try again later.' }
-// });
-
-// Apply rate limiter to all routes
-// router.use(limiter);
 
 const asyncHandler = (
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void | Response>
@@ -161,7 +150,7 @@ router.post('/balances', asyncHandler(async (req: Request, res: Response) => {
 router.get('/balance/:address', asyncHandler(async (req: Request, res: Response) => {
   const { address } = req.params;
   const client = await CosmWasmClient.connect(process.env.RPC_URL || 'https://rpc.xion-testnet-1.burnt.com:443');
-  const balance = await client.getBalance(address, 'ibc/57097251ED81A232CE3C9D899E7C8096D6D87EF84BA203E12E424AA4C9B57A64');
+  const balance = await client.getBalance(address, 'uxion');
 
   return res.status(200).json({
     success: true,
