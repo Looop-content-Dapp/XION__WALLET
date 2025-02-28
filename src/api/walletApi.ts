@@ -37,46 +37,44 @@ const asyncHandler = (
 };
 
 router.post('/signup', asyncHandler(async (req: Request, res: Response) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Email and password required' });
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email required' });
   }
 
-  const { address, mnemonic } = await auth.signup(email, password);
+  const { address, mnemonic } = await auth.signup(email);
   return res.status(200).json({
     success: true,
-    data: { walletAddress: address, mnemonic }, // Optional: include mnemonic
+    data: { walletAddress: address, mnemonic },
     message: 'Account created successfully - save your mnemonic if desired!'
   });
 }));
 
 router.post('/login', asyncHandler(async (req: Request, res: Response) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: 'Email and password required' });
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email required' });
   }
 
-  await auth.login(email, password);
+  await auth.login(email);
   const walletAddress = await auth.getKeypairAddress();
   return res.status(200).json({
     success: true,
-    data: { walletAddress  },
+    data: { walletAddress },
     message: 'Logged in successfully'
   });
 }));
 
-// Endpoint to get NFTs for the logged-in user
 router.post('/nfts', asyncHandler(async (req: Request, res: Response) => {
-  const { email, password, contractAddress } = req.body;
-  if (!email || !password || !contractAddress) {
+  const { email, contractAddress } = req.body;
+  if (!email || !contractAddress) {
     return res.status(400).json({
       success: false,
-      message: 'Email, password, and contractAddress are required',
+      message: 'Email and contractAddress are required',
     });
   }
 
-  // Authenticate the user
-  await auth.login(email, password);
+  await auth.login(email);
   const nfts = await auth.getLoggedInUserNFTs(contractAddress);
 
   return res.status(200).json({
@@ -90,10 +88,9 @@ router.post('/nfts', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
-// Endpoint to get NFTs for any address (public query)
 router.get('/nfts/:address', asyncHandler(async (req: Request, res: Response) => {
   const { address } = req.params;
-  const { contractAddress } = req.query; // Pass contractAddress as a query parameter
+  const { contractAddress } = req.query;
   if (!address || !contractAddress) {
     return res.status(400).json({
       success: false,
@@ -114,40 +111,13 @@ router.get('/nfts/:address', asyncHandler(async (req: Request, res: Response) =>
   });
 }));
 
-router.post('/recover', asyncHandler(async (req: Request, res: Response) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Email required' });
-  }
-
-  const token = await auth.requestRecovery(email);
-  return res.status(200).json({
-    success: true,
-    data: { recoveryToken: token }, // In prod, email this
-    message: 'Recovery email sent - check your inbox!'
-  });
-}));
-
-router.post('/reset-password', asyncHandler(async (req: Request, res: Response) => {
-  const { email, token, newPassword } = req.body;
-  if (!email || !token || !newPassword) {
-    return res.status(400).json({ success: false, message: 'Email, token, and new password required' });
-  }
-
-  await auth.resetPassword(email, token, newPassword);
-  return res.status(200).json({
-    success: true,
-    message: 'Password reset successfully - log in with your new password'
-  });
-}));
-
 router.post('/transfer', asyncHandler(async (req: Request, res: Response) => {
-  const { email, password, toAddress, amount } = req.body;
-  if (!email || !password || !toAddress || !amount) {
+  const { email, toAddress, amount } = req.body;
+  if (!email || !toAddress || !amount) {
     return res.status(400).json({ success: false, message: 'Missing required parameters' });
   }
 
-  await auth.login(email, password);
+  await auth.login(email);
   const signerClient = await auth.getSigner();
   const fromAddress = await auth.getKeypairAddress();
   const usdcDenom = 'ibc/57097251ED81A232CE3C9D899E7C8096D6D87EF84BA203E12E424AA4C9B57A64';
@@ -171,6 +141,23 @@ router.post('/transfer', asyncHandler(async (req: Request, res: Response) => {
   });
 }));
 
+router.post('/balances', asyncHandler(async (req: Request, res: Response) => {
+    const { email, denoms } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email required' });
+    }
+
+    await auth.login(email);
+    const address = await auth.getKeypairAddress();
+    const balances = await auth.getBalances(address, denoms);
+
+    return res.status(200).json({
+      success: true,
+      data: { address, balances },
+      message: 'Balances retrieved successfully'
+    });
+  }));
+
 router.get('/balance/:address', asyncHandler(async (req: Request, res: Response) => {
   const { address } = req.params;
   const client = await CosmWasmClient.connect(process.env.RPC_URL || 'https://rpc.xion-testnet-1.burnt.com:443');
@@ -184,12 +171,12 @@ router.get('/balance/:address', asyncHandler(async (req: Request, res: Response)
 }));
 
 router.post('/execute-contract', asyncHandler(async (req: Request, res: Response) => {
-  const { email, password, contractAddress, msg, memo } = req.body;
-  if (!email || !password || !contractAddress || !msg) {
-    return res.status(400).json({ success: false, message: 'Missing required parameters: email, password, contractAddress, and msg are required' });
+  const { email, contractAddress, msg, memo } = req.body;
+  if (!email || !contractAddress || !msg) {
+    return res.status(400).json({ success: false, message: 'Missing required parameters: email, contractAddress, and msg are required' });
   }
 
-  await auth.login(email, password); // Authenticate user
+  await auth.login(email);
   const result = await auth.executeSmartContract(contractAddress, msg, memo);
 
   return res.status(200).json({
@@ -200,12 +187,12 @@ router.post('/execute-contract', asyncHandler(async (req: Request, res: Response
 }));
 
 router.post('/reset-email', asyncHandler(async (req: Request, res: Response) => {
-  const { currentEmail, newEmail, password } = req.body;
-  if (!currentEmail || !newEmail || !password) {
-    return res.status(400).json({ success: false, message: 'Missing required parameters: currentEmail, newEmail, and password are required' });
+  const { currentEmail, newEmail } = req.body;
+  if (!currentEmail || !newEmail) {
+    return res.status(400).json({ success: false, message: 'Missing required parameters: currentEmail and newEmail are required' });
   }
 
-  const result = await auth.resetEmail(currentEmail, newEmail, password);
+  const result = await auth.resetEmail(currentEmail, newEmail);
 
   return res.status(200).json({
     success: true,
