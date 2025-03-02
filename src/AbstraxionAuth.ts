@@ -400,7 +400,7 @@ export class AbstraxionAuth {
         throw new Error("Insufficient uxion balance to cover fees");
       }
 
-      const fee = { amount: coins(5000, "uxion"), gas: "200000" };
+      const fee = { amount: coins(5000, "uxion"), gas: "2000000" };
       const result = await signer.execute(
         senderAddress,
         contractAddress,
