@@ -12,8 +12,8 @@ const auth = new AbstraxionAuth();
 connectToDatabase();
 
 auth.configureAbstraxionInstance(
-  process.env.RPC_URL || 'https://rpc.xion-testnet-1.burnt.com:443',
-  process.env.REST_URL || 'https://api.xion-testnet-1.burnt.com',
+  process.env.RPC_URL || 'https://rpc.xion-testnet-2.burnt.com:443',
+  process.env.REST_URL || 'https://api.xion-testnet-2.burnt.com',
   process.env.TREASURY_ADDRESS
 );
 
@@ -149,7 +149,7 @@ router.post('/balances', asyncHandler(async (req: Request, res: Response) => {
 
 router.get('/balance/:address', asyncHandler(async (req: Request, res: Response) => {
   const { address } = req.params;
-  const client = await CosmWasmClient.connect(process.env.RPC_URL || 'https://rpc.xion-testnet-1.burnt.com:443');
+  const client = await CosmWasmClient.connect(process.env.RPC_URL || 'https://rpc.xion-testnet-2.burnt.com:443');
   const balance = await client.getBalance(address, 'uxion');
 
   return res.status(200).json({

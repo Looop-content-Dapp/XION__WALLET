@@ -18,7 +18,7 @@ async function setupFeeGrant() {
   registry.register("/cosmos.feegrant.v1beta1.BasicAllowance", BasicAllowance);
 
   // Connect to Xion testnet with the custom registry
-  const rpcEndpoint = "https://rpc.xion-testnet-1.burnt.com:443";
+  const rpcEndpoint = "https://rpc.xion-testnet-2.burnt.com:443";
   const client = await SigningStargateClient.connectWithSigner(rpcEndpoint, granterWallet, {
     registry,
   });

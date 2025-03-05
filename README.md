@@ -96,8 +96,8 @@ XION__WALLET/
    ```
    MONGODB_URI=mongodb+srv://looopMusic:Dailyblessing@looopmusic.a5lp1.mongodb.net/?retryWrites=true&w=majority&appName=LooopMusic
    SERVER_SECRET=your-very-long-random-secret
-   RPC_URL=https://rpc.xion-testnet-1.burnt.com:443
-   REST_URL=https://api.xion-testnet-1.burnt.com
+   RPC_URL=https://rpc.xion-testnet-2.burnt.com:443
+   REST_URL=https://api.xion-testnet-2.burnt.com
    TREASURY_ADDRESS=your-treasury-address
    GRANTER_ADDRESS=your-granter-address
    PORT=3001
